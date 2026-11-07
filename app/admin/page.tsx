@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { TriangleAlert } from "lucide-react";
+import { Download, RefreshCw, TriangleAlert, Upload } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { formatPrice } from "@/lib/format";
 
@@ -16,6 +16,59 @@ type Stats = {
   low_stock: { id: string; name: string; stock: number }[];
   daily: { day: string; total: number }[];
 };
+
+const SNAPSHOT_FORMAT = "tech-sell-dashboard";
+const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_STORAGE_KEY = "tech-sell-dashboard-snapshot-v1";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStats(value: unknown): value is Stats {
+  if (!isRecord(value)) return false;
+  const numericFields = ["sales_month", "sales_week", "orders_month", "pending_orders", "margin_month"];
+  return (
+    numericFields.every((field) => typeof value[field] === "number" && Number.isFinite(value[field])) &&
+    Array.isArray(value.top_products) &&
+    value.top_products.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.name === "string" &&
+        typeof item.qty === "number" &&
+        Number.isFinite(item.qty),
+    ) &&
+    Array.isArray(value.low_stock) &&
+    value.low_stock.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.id === "string" &&
+        typeof item.name === "string" &&
+        typeof item.stock === "number" &&
+        Number.isFinite(item.stock),
+    ) &&
+    Array.isArray(value.daily) &&
+    value.daily.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.day === "string" &&
+        typeof item.total === "number" &&
+        Number.isFinite(item.total),
+    )
+  );
+}
+
+function parseSnapshot(value: unknown): Stats | null {
+  if (
+    !isRecord(value) ||
+    value.format !== SNAPSHOT_FORMAT ||
+    value.version !== SNAPSHOT_VERSION ||
+    !isStats(value.stats)
+  ) {
+    return null;
+  }
+  return value.stats;
+}
 
 function Kpi({ label, value, hint, href }: { label: string; value: string; hint?: string; href?: string }) {
   const body = (
@@ -31,22 +84,161 @@ function Kpi({ label, value, hint, href }: { label: string; value: string; hint?
 export default function DashboardPage() {
   const [s, setS] = useState<Stats | null>(null);
   const [error, setError] = useState("");
+  const [syncStatus, setSyncStatus] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const importRevision = useRef(0);
 
-  useEffect(() => {
-    supabase.rpc("dashboard_stats").then(({ data, error: err }) => {
-      if (err) setError(err.message);
-      else setS(data as Stats);
-    });
+  const syncFromSupabase = useCallback(async () => {
+    const revision = importRevision.current;
+    setSyncing(true);
+    setError("");
+    let data: unknown;
+    let err: { message: string } | null;
+    try {
+      const result = await supabase.rpc("dashboard_stats");
+      data = result.data;
+      err = result.error;
+    } catch {
+      setError("Impossible de joindre Supabase pour synchroniser le tableau de bord.");
+      setSyncing(false);
+      return;
+    }
+    if (revision !== importRevision.current) {
+      setSyncing(false);
+      return;
+    }
+    if (err) {
+      setError(err.message);
+      setSyncing(false);
+      return;
+    }
+    if (!isStats(data)) {
+      setError("Les données reçues de Supabase ne correspondent pas au format du tableau de bord.");
+      setSyncing(false);
+      return;
+    }
+    setS(data);
+    setSyncStatus("Données synchronisées depuis Supabase.");
+    try {
+      localStorage.setItem(
+        SNAPSHOT_STORAGE_KEY,
+        JSON.stringify({
+          format: SNAPSHOT_FORMAT,
+          version: SNAPSHOT_VERSION,
+          exportedAt: new Date().toISOString(),
+          stats: data,
+        }),
+      );
+    } catch {
+      setSyncStatus("Données chargées, mais la copie locale n’a pas pu être enregistrée.");
+    }
+    setSyncing(false);
   }, []);
 
-  if (error) return <p className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>;
-  if (!s) return <p className="text-slate-400">Chargement…</p>;
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+      if (saved) {
+        const stats = parseSnapshot(JSON.parse(saved) as unknown);
+        if (stats) {
+          setS(stats);
+          setSyncStatus("Copie locale affichée ; synchronisez pour récupérer les dernières données.");
+        }
+      }
+    } catch {
+      setError("Impossible de lire la copie locale du tableau de bord.");
+    }
+    void syncFromSupabase();
+  }, [syncFromSupabase]);
 
-  const max = Math.max(1, ...s.daily.map((d) => d.total));
+  function exportSnapshot() {
+    if (!s) return;
+    const snapshot = {
+      format: SNAPSHOT_FORMAT,
+      version: SNAPSHOT_VERSION,
+      exportedAt: new Date().toISOString(),
+      stats: s,
+    };
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `tech-sell-tableau-de-bord-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setSyncStatus("Instantané JSON exporté.");
+  }
+
+  async function importSnapshot(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    setError("");
+    try {
+      const stats = parseSnapshot(JSON.parse(await file.text()) as unknown);
+      if (!stats) {
+        setError("Fichier invalide ou incompatible. Choisissez un export JSON du tableau de bord.");
+        return;
+      }
+      importRevision.current += 1;
+      setS(stats);
+      localStorage.setItem(
+        SNAPSHOT_STORAGE_KEY,
+        JSON.stringify({
+          format: SNAPSHOT_FORMAT,
+          version: SNAPSHOT_VERSION,
+          exportedAt: new Date().toISOString(),
+          stats,
+        }),
+      );
+      setSyncStatus("Instantané importé sur cet appareil. Il ne modifie pas les données Supabase.");
+    } catch {
+      setError("Impossible de lire ce fichier JSON ou d’enregistrer sa copie locale.");
+    } finally {
+      input.value = "";
+    }
+  }
+
+  const max = Math.max(1, ...(s?.daily ?? []).map((d) => d.total));
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-extrabold text-ink">Tableau de bord</h1>
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-extrabold text-ink">Tableau de bord</h1>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-outline" onClick={() => void syncFromSupabase()} disabled={syncing}>
+            <RefreshCw size={15} aria-hidden="true" />
+            {syncing ? "Synchronisation…" : "Synchroniser"}
+          </button>
+          <button className="btn-outline" onClick={() => fileInput.current?.click()}>
+            <Upload size={15} aria-hidden="true" /> Importer JSON
+          </button>
+          <button className="btn-primary" onClick={exportSnapshot} disabled={!s}>
+            <Download size={15} aria-hidden="true" /> Exporter JSON
+          </button>
+          <input
+            ref={fileInput}
+            className="hidden"
+            type="file"
+            accept="application/json,.json"
+            onChange={importSnapshot}
+          />
+        </div>
+      </header>
+
+      <p className="text-xs text-slate-500">
+        L’import et l’export concernent uniquement les indicateurs du tableau de bord et la copie locale de cet appareil ;
+        ils ne modifient pas les données de la boutique.
+      </p>
+      {syncStatus && <p className="text-xs text-emerald-700" role="status">{syncStatus}</p>}
+      {error && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</p>}
+
+      {!s ? (
+        <p className="text-slate-400">Chargement du tableau de bord… Importez un instantané JSON si nécessaire.</p>
+      ) : (
+        <>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Ventes du mois" value={formatPrice(s.sales_month)} hint="Commandes validées et livrées" />
@@ -115,6 +307,8 @@ export default function DashboardPage() {
           </ul>
         )}
       </section>
+        </>
+      )}
     </div>
   );
 }

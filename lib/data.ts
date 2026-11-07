@@ -55,6 +55,7 @@ export async function getActiveOffers(): Promise<Offer[]> {
     .eq("is_active", true)
     .lte("starts_at", now)
     .gte("ends_at", now)
+    .order("percent", { ascending: false })
     .order("ends_at", { ascending: true });
   return (data as Offer[]) || [];
 }
