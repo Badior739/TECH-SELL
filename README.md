@@ -38,7 +38,7 @@ npm run dev
 - **Catalogue** : produits et catégories uniquement.
 - **Commandes** : tableau de bord, commandes et clients.
 
-Les permissions sont contrôlées dans l'interface et par les politiques RLS. `/admin/utilisateurs` permet au super administrateur de créer un compte Auth avec un mot de passe temporaire, de changer le rôle et de révoquer l'accès admin. Aucun e-mail d'invitation n'est envoyé automatiquement : transmettez le mot de passe au destinataire par un canal privé. La révocation retire l'accès administrateur, mais ne supprime pas le compte Auth.
+Les permissions sont contrôlées dans l'interface et par les politiques RLS. `/admin/utilisateurs` permet au super administrateur de créer un compte Auth avec un mot de passe temporaire, de changer le rôle, d'exporter la liste en CSV et de supprimer un compte Auth. Aucun e-mail d'invitation n'est envoyé automatiquement : transmettez le mot de passe au destinataire par un canal privé. Le dernier super administrateur et le compte actuellement connecté ne peuvent pas être supprimés ou rétrogradés.
 
 Pour une base existante : exécutez une fois `supabase/admin-roles.sql`, puis `supabase/grant-admin.sql` pour promouvoir le compte principal en super administrateur.
 

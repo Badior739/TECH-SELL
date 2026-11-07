@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, LoaderCircle, Shield, UserPlus, UserRoundX } from "lucide-react";
+import { Download, KeyRound, LoaderCircle, Shield, Trash2, UserPlus } from "lucide-react";
 import {
   ADMIN_ROLES,
   ADMIN_ROLE_DESCRIPTIONS,
@@ -16,6 +16,11 @@ type AdminUser = {
   role: AdminRole;
   createdAt: string;
   lastSignInAt: string | null;
+};
+
+type AdminUsersResponse = {
+  users?: AdminUser[];
+  currentUserId?: string;
 };
 
 async function adminRequest(path: string, init?: RequestInit) {
@@ -38,11 +43,12 @@ async function adminRequest(path: string, init?: RequestInit) {
   }
 
   if (response.status === 204) return null;
-  return response.json() as Promise<{ users?: AdminUser[] }>;
+  return response.json() as Promise<AdminUsersResponse>;
 }
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
+  const [currentUserId, setCurrentUserId] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<AdminRole>("catalog");
@@ -55,6 +61,7 @@ export default function AdminUsersPage() {
     try {
       const result = await adminRequest("/api/admin/users");
       setUsers(result?.users || []);
+      setCurrentUserId(result?.currentUserId || "");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Impossible de charger les comptes.");
     }
@@ -86,6 +93,29 @@ export default function AdminUsersPage() {
     }
   }
 
+  function exportUsers() {
+    if (!users?.length) return;
+    const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const rows = [
+      ["E-mail", "Rôle", "Date de création", "Dernière connexion"],
+      ...users.map((user) => [
+        user.email,
+        ADMIN_ROLE_LABELS[user.role],
+        new Date(user.createdAt).toLocaleDateString("fr-FR"),
+        user.lastSignInAt ? new Date(user.lastSignInAt).toLocaleDateString("fr-FR") : "Jamais connecté",
+      ]),
+    ];
+    const csv = `\uFEFF${rows.map((row) => row.map(escapeCsv).join(";")).join("\r\n")}`;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `utilisateurs-admin-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function updateRole(user: AdminUser, nextRole: AdminRole) {
     if (user.role === nextRole) return;
     setError("");
@@ -106,13 +136,13 @@ export default function AdminUsersPage() {
   }
 
   async function revokeAccess(user: AdminUser) {
-    if (!window.confirm(`Révoquer l’accès à l’administration pour ${user.email} ?`)) return;
+    if (!window.confirm(`Supprimer définitivement le compte de ${user.email} et révoquer son accès ? Cette action est irréversible.`)) return;
     setError("");
     setSuccess("");
     setBusy(user.id);
     try {
       await adminRequest(`/api/admin/users/${user.id}`, { method: "DELETE" });
-      setSuccess(`Accès administrateur révoqué pour ${user.email}. Le compte Auth n’est pas supprimé.`);
+      setSuccess(`Le compte de ${user.email} et son accès administrateur ont été supprimés.`);
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "La révocation de l’accès a échoué.");
@@ -198,12 +228,18 @@ export default function AdminUsersPage() {
       {success && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</p>}
 
       <section className="card overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="font-bold text-ink">Équipe avec accès administrateur</h2>
             <p className="mt-1 text-xs text-slate-500">{users ? `${users.length} compte(s)` : "Chargement…"}</p>
           </div>
-          {busy && <LoaderCircle size={17} className="animate-spin text-slate-400" aria-label="Mise à jour" />}
+          <div className="flex items-center gap-2">
+            {busy && <LoaderCircle size={17} className="animate-spin text-slate-400" aria-label="Mise à jour" />}
+            <button type="button" className="btn-outline !h-9 !px-3" disabled={!users?.length || busy !== ""} onClick={exportUsers}>
+              <Download size={15} aria-hidden="true" />
+              Exporter CSV
+            </button>
+          </div>
         </div>
 
         {users === null ? (
@@ -227,7 +263,7 @@ export default function AdminUsersPage() {
                   <select
                     className="input min-w-[190px] !w-auto"
                     value={user.role}
-                    disabled={busy !== ""}
+                    disabled={busy !== "" || user.id === currentUserId}
                     aria-label={`Rôle de ${user.email}`}
                     onChange={(event) => void updateRole(user, event.target.value as AdminRole)}
                   >
@@ -238,13 +274,13 @@ export default function AdminUsersPage() {
                   <button
                     type="button"
                     className="btn-outline !h-10 !px-3 text-red-700 hover:!bg-red-50"
-                    disabled={busy !== ""}
+                    disabled={busy !== "" || user.id === currentUserId}
                     onClick={() => void revokeAccess(user)}
-                    aria-label={`Révoquer l’accès de ${user.email}`}
-                    title="Révoquer l’accès administrateur"
+                    aria-label={`Supprimer le compte de ${user.email}`}
+                    title={user.id === currentUserId ? "Vous ne pouvez pas supprimer votre propre compte" : "Supprimer le compte"}
                   >
-                    <UserRoundX size={16} aria-hidden="true" />
-                    <span className="hidden sm:inline">Révoquer</span>
+                    <Trash2 size={16} aria-hidden="true" />
+                    <span className="hidden sm:inline">Supprimer</span>
                   </button>
                 </div>
               </li>

@@ -81,7 +81,7 @@ export async function GET(request: Request) {
       lastSignInAt: user.last_sign_in_at,
     }));
 
-  return NextResponse.json({ users });
+  return NextResponse.json({ users, currentUserId: access.actorId });
 }
 
 export async function POST(request: Request) {

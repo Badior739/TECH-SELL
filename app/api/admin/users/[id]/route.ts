@@ -86,13 +86,22 @@ export async function DELETE(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Identifiant de compte invalide." }, { status: 400 });
   }
 
-  const { error } = await access.supabase.rpc("remove_admin_role", {
+  const { error: revokeError } = await access.supabase.rpc("remove_admin_role", {
     p_actor_id: access.actorId,
     p_user_id: id,
   });
-  if (error) {
-    console.error("Révocation du rôle admin impossible.", error);
-    return NextResponse.json({ error: error.message }, { status: 409 });
+  if (revokeError) {
+    console.error("Révocation du rôle admin impossible.", revokeError);
+    return NextResponse.json({ error: revokeError.message }, { status: 409 });
+  }
+
+  const { error: deleteError } = await access.supabase.auth.admin.deleteUser(id);
+  if (deleteError) {
+    console.error("Suppression du compte Auth impossible après révocation de son accès admin.", deleteError);
+    return NextResponse.json(
+      { error: "L’accès admin a été révoqué, mais le compte Auth n’a pas pu être supprimé." },
+      { status: 500 }
+    );
   }
 
   return new NextResponse(null, { status: 204 });
